@@ -1,0 +1,106 @@
+import argparse
+from pyspark.sql import
+SparkSession
+from pyspark.sql.functions import
+unix_timestamp, log1p, col, when
+from pyspark.ml.feature import
+StringIndexer, VectorAssembler
+from pyspark.ml.classification
+import GBTClassifier
+from pyspark.ml import Pipeline
+from pyspark.ml.evaluation
+import
+BinaryClassificationEvaluator
+def main(args):
+spark =
+SparkSession.builder.appName("fr
+aud_train_spark").getOrCreate()
+df =
+spark.read.parquet(args.data)
+df = df.withColumn("ts",
+unix_timestamp(col("timestamp")
+).cast("long"))
+df =
+df.withColumn("amount_log", 
+log1p(col("amount")))
+si =
+StringIndexer(inputCol="merchan
+t_category",
+outputCol="merchant_cat_idx",
+handleInvalid="keep")
+feature_inputs = ["amount_log",
+"merchant_cat_idx"]
+assembler =
+VectorAssembler(inputCols=feature_inputs, outputCol="features")
+df = df.withColumn("label",
+col("is_fraud").cast("double"))
+fraud_count =
+df.filter(col("label")==1).count()
+nonfraud_count =
+df.filter(col("label")==0).count()
+ratio = nonfraud_count /
+float(fraud_count) if fraud_count
+> 0 else 1.0
+df =
+df.withColumn("class_weight",when(col("label")==1,
+ratio).otherwise(1.0))
+df = df.orderBy(col("ts"))
+total = df.count()
+train_count = int(0.8 * total)
+train_df = df.limit(train_count)
+test_df = df.subtract(train_df)
+gbt =
+GBTClassifier(featuresCol="featu
+res", labelCol="label",
+weightCol="class_weight",
+maxIter=100)
+pipeline = Pipeline(stages=[si,
+assembler, gbt])
+model = pipeline.fit(train_df)
+preds =
+model.transform(test_df)
+evaluator = BinaryClassificationEvaluator(lab
+elCol="label",
+rawPredictionCol="rawPrediction
+", metricName="areaUnderPR")
+auc_pr =
+evaluator.evaluate(preds)
+print("AUC-PR:", auc_pr)
+model.write().overwrite().save(arg
+s.out)
+print("Saved Spark model to",
+args.out)
+spark.stop()
+if name == " main ": 
+  parser =
+argparse.ArgumentParser()
+parser.add_argument("--data",
+required=True)
+parser.add_argument("--out",
+required=True)
+main(parser.parse_args()) 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
